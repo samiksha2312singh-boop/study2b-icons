@@ -52,11 +52,21 @@ div[data-testid="stDecoration"] {display:none;}
 }
 </style>""", unsafe_allow_html=True)
 
-# Initialize OpenAI
+# Initialize OpenAI with detailed error checking
+st.sidebar.markdown("### 🔍 Diagnostic Info")
 try:
-    client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
-except:
-    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY", ""))
+    api_key = st.secrets["OPENAI_API_KEY"]
+    st.sidebar.success(f"✅ OpenAI Key Found: {api_key[:10]}...")
+    client = OpenAI(api_key=api_key)
+except Exception as e:
+    st.sidebar.error(f"❌ OpenAI Key Error: {str(e)}")
+    try:
+        api_key = os.getenv("OPENAI_API_KEY", "")
+        client = OpenAI(api_key=api_key)
+        st.sidebar.warning("⚠️ Using env variable")
+    except:
+        client = None
+        st.sidebar.error("❌ No OpenAI key found!")
 
 # Function to load and encode icon
 @st.cache_data
@@ -65,9 +75,10 @@ def get_icon_base64(icon_path):
     try:
         with open(icon_path, "rb") as f:
             data = f.read()
+        st.sidebar.success(f"✅ Icon loaded: {icon_path}")
         return base64.b64encode(data).decode()
     except Exception as e:
-        st.error(f"Error loading icon {icon_path}: {str(e)}")
+        st.sidebar.warning(f"⚠️ Icon error: {icon_path} - {str(e)}")
         return None
 
 # Google Sheets setup
@@ -93,9 +104,10 @@ def get_google_sheet():
                 'Active Chat Seconds', 'Message Number', 'Role', 'Content', 'Timestamp'
             ])
         
+        st.sidebar.success("✅ Google Sheets connected!")
         return sheet
     except Exception as e:
-        st.error(f"Google Sheets error: {str(e)}")
+        st.sidebar.error(f"❌ Google Sheets error: {str(e)}")
         return None
 
 def save_to_google_sheets(session_id, condition, session_start, first_message, 
@@ -110,8 +122,9 @@ def save_to_google_sheets(session_id, condition, session_start, first_message,
                 total_messages, total_session_seconds, active_chat_seconds, 
                 message_number, role, content, timestamp
             ])
+            st.sidebar.info(f"💾 Saved: {role} message")
         except Exception as e:
-            st.error(f"Error saving: {str(e)}")
+            st.sidebar.error(f"❌ Save error: {str(e)}")
 
 def calculate_time_metrics():
     current_time = datetime.now()
@@ -175,21 +188,32 @@ for msg in st.session_state.messages[1:]:
 user_input = st.chat_input("Type your message here...")
 
 if user_input:
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("### 🔄 Processing...")
+    
     if st.session_state.first_message_time is None:
         st.session_state.first_message_time = datetime.now()
     
     current_time = datetime.now()
     message_number = len(st.session_state.messages)
     
+    # Add user message
     st.session_state.messages.append({
         "role": "user", 
         "content": user_input,
         "timestamp": current_time.strftime('%Y-%m-%d %H:%M:%S')
     })
+    st.sidebar.info("✅ User message added")
     
     st.session_state.last_message_time = current_time
     
+    # Check if client exists
+    if client is None:
+        st.error("❌ ERROR: OpenAI client not initialized. Check your API key!")
+        st.stop()
+    
     try:
+        st.sidebar.info("📡 Calling OpenAI API...")
         with st.spinner("🤖 Getting response..."):
             response = client.chat.completions.create(
                 model="gpt-4o",
@@ -197,6 +221,8 @@ if user_input:
                 max_tokens=500,
                 temperature=0.7
             )
+        
+        st.sidebar.success("✅ Got OpenAI response!")
         
         assistant_message = response.choices[0].message.content
         assistant_time = datetime.now()
@@ -207,11 +233,13 @@ if user_input:
             "timestamp": assistant_time.strftime('%Y-%m-%d %H:%M:%S')
         })
         
+        st.sidebar.success("✅ Assistant message added")
         st.session_state.last_message_time = assistant_time
         
         time_metrics = calculate_time_metrics()
         
         # Save user message
+        st.sidebar.info("💾 Saving to Google Sheets...")
         save_to_google_sheets(
             st.session_state.session_id, st.session_state.condition,
             time_metrics["session_start"], time_metrics["first_message"],
@@ -229,10 +257,16 @@ if user_input:
             message_number + 1, "assistant", assistant_message, assistant_time.strftime('%Y-%m-%d %H:%M:%S')
         )
         
+        st.sidebar.success("✅ All done! Reloading...")
+        
     except Exception as e:
-        st.error(f"❌ Error: {str(e)}")
+        st.error(f"❌ ERROR: {str(e)}")
+        st.sidebar.error(f"❌ Exception: {str(e)}")
         import traceback
-        st.code(traceback.format_exc())
+        error_details = traceback.format_exc()
+        st.code(error_details)
+        st.sidebar.code(error_details)
+        st.stop()
     
     st.rerun()
 
@@ -250,12 +284,11 @@ if len(st.session_state.messages) >= 11:
     </div>""", unsafe_allow_html=True)
 
 # Sidebar
+st.sidebar.markdown("---")
 st.sidebar.markdown("### Study Info")
 st.sidebar.markdown(f"**Session:** `{st.session_state.session_id}`")
 st.sidebar.markdown(f"**Condition:** {st.session_state.condition}")
 st.sidebar.markdown(f"**Messages:** {len(st.session_state.messages) - 1}")
-st.sidebar.success("📊 Data saving to Google Sheets!")
-st.sidebar.info("✅ External storage - persists across restarts")
 
 if st.sidebar.button("🔄 Reset"):
     for key in list(st.session_state.keys()):
